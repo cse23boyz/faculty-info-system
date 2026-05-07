@@ -53,6 +53,7 @@ export default function FacultyDashboard() {
   const [viewCertificate, setViewCertificate] = useState<any>(null);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [certTypeFilter, setCertTypeFilter] = useState('All');
+  const [uploadFileType, setUploadFileType] = useState('');
 
   // Announcements state
   const [announcements, setAnnouncements] = useState<any[]>([]);
@@ -93,7 +94,6 @@ export default function FacultyDashboard() {
     { id: 'announcements', label: 'Announcements', icon: '📢' },
     { id: 'messages', label: 'Messages', icon: '💬' },
     { id: 'profile', label: 'My Profile', icon: '👤' },
-    { id: 'upload', label: 'Upload Certificate', icon: '📤' },
   ];
 
   // Initialize
@@ -289,13 +289,26 @@ export default function FacultyDashboard() {
   }, [activeTab, departmentFilter, searchFaculty]);
 
   // Upload certificate
-  const handleCertificateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+// Upload certificate
+const handleCertificateUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Set file type for UI
+    if (file.type.startsWith('image/')) {
+      setUploadFileType('image');
+    } else if (file.type === 'application/pdf' || file.name.endsWith('.pdf')) {
+      setUploadFileType('pdf');
+    } else {
+      setUploadFileType('other');
+    }
+
     setUploading(true);
     setExtractedData(null);
+
     const formData = new FormData();
     formData.append('certificate', file);
+
     try {
       const res = await fetch('/api/faculty/certificates', {
         method: 'POST',
@@ -303,6 +316,7 @@ export default function FacultyDashboard() {
         body: formData,
       });
       const data = await res.json();
+
       if (res.ok) {
         showNotification('✅ Certificate uploaded!');
         setExtractedData(data.extracted);
@@ -315,6 +329,7 @@ export default function FacultyDashboard() {
       showNotification('❌ Upload failed');
     } finally {
       setUploading(false);
+      setUploadFileType('');
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
@@ -775,31 +790,110 @@ export default function FacultyDashboard() {
         </div>
       </div>
 
-      {/* ============ UPLOAD MODAL ============ */}
-      {showUploadModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-violet-700 rounded-2xl p-8 w-full max-w-lg border border-white/20 shadow-2xl">
-            <h2 className="text-2xl font-bold text-white mb-2">Upload Certificate</h2>
-            <p className="text-blue-200 text-sm mb-6">AI will auto-extract details.</p>
-            <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-white/30 rounded-xl p-8 text-center cursor-pointer hover:border-white/50 transition">
-              {uploading ? <div><div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-3"></div><p className="text-white text-sm">Analyzing...</p></div> : <div><span className="text-5xl">📤</span><p className="text-white mt-3">Click to select file</p><p className="text-blue-200/60 text-xs mt-1">PDF, JPG, PNG (Max 10MB)</p></div>}
-              <input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png" onChange={handleCertificateUpload} className="hidden" />
+     {/* ============ UPLOAD MODAL ============ */}
+{showUploadModal && (
+  <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+    <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-violet-700 rounded-2xl p-8 w-full max-w-lg border border-white/20 shadow-2xl">
+      <h2 className="text-2xl font-bold text-white mb-2">Upload Certificate</h2>
+      <p className="text-blue-200 text-sm mb-6">AI will auto-extract details.</p>
+      
+      <div className="space-y-4">
+        <div 
+          onClick={() => fileInputRef.current?.click()} 
+          className="border-2 border-dashed border-white/30 rounded-xl p-8 text-center cursor-pointer hover:border-white/50 transition"
+        >
+          {uploading ? (
+            <div>
+              <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-3"></div>
+              <p className="text-white text-sm">
+                {uploadFileType === 'image' ? '🔍 Running OCR on image...' : 
+                 uploadFileType === 'pdf' ? '📄 Analyzing PDF certificate...' : 
+                 '📄 Analyzing certificate...'}
+              </p>
+              <p className="text-blue-200/60 text-xs mt-1">This may take a few seconds</p>
             </div>
-            {extractedData && (
-              <div className="mt-4 bg-green-500/10 rounded-xl p-4 border border-green-400/20">
-                <h4 className="text-green-300 text-sm font-medium mb-3">🤖 AI Extracted:</h4>
-                <div className="grid grid-cols-2 gap-2 text-xs">
-                  <div><span className="text-green-200/60">Type:</span><p className="text-green-200">{extractedData.certificateType || 'N/A'}</p></div>
-                  <div><span className="text-green-200/60">Year:</span><p className="text-green-200">{extractedData.year || 'N/A'}</p></div>
-                  <div className="col-span-2"><span className="text-green-200/60">Title:</span><p className="text-green-200">{extractedData.title || 'N/A'}</p></div>
-                  <div className="col-span-2"><span className="text-green-200/60">Issued By:</span><p className="text-green-200">{extractedData.issuedBy || 'N/A'}</p></div>
-                </div>
-              </div>
-            )}
-            <button onClick={() => { setShowUploadModal(false); setExtractedData(null); }} className="w-full mt-4 px-4 py-3 text-sm text-white border border-white/30 rounded-xl hover:bg-white/10 transition">Close</button>
-          </div>
+          ) : (
+            <div>
+              <span className="text-5xl">📤</span>
+              <p className="text-white mt-3">Click to select file</p>
+              <p className="text-blue-200/60 text-xs mt-1">PDF, JPG, PNG (Max 10MB)</p>
+            </div>
+          )}
+          <input 
+            ref={fileInputRef} 
+            type="file" 
+            accept=".pdf,.jpg,.jpeg,.png" 
+            onChange={handleCertificateUpload} 
+            className="hidden" 
+          />
         </div>
-      )}
+
+        {extractedData && (
+          <div className="mt-4 bg-green-500/10 rounded-xl p-4 border border-green-400/20">
+            <h4 className="text-green-300 text-sm font-medium mb-3">
+              🤖 AI Extracted (Confidence: {extractedData.confidence || 0}%):
+            </h4>
+            <div className="grid grid-cols-2 gap-2 text-xs">
+              <div>
+                <span className="text-green-200/60">Type:</span>
+                <p className="text-green-200">{extractedData.certificateType || 'N/A'}</p>
+              </div>
+              <div>
+                <span className="text-green-200/60">Year:</span>
+                <p className="text-green-200">{extractedData.year || 'N/A'}</p>
+              </div>
+              <div className="col-span-2">
+                <span className="text-green-200/60">Title:</span>
+                <p className="text-green-200">{extractedData.title || 'N/A'}</p>
+              </div>
+              <div className="col-span-2">
+                <span className="text-green-200/60">Issued By:</span>
+                <p className="text-green-200">{extractedData.issuedBy || 'N/A'}</p>
+              </div>
+              {extractedData.recipientName && (
+                <div className="col-span-2">
+                  <span className="text-green-200/60">Recipient:</span>
+                  <p className="text-green-200">{extractedData.recipientName}</p>
+                </div>
+              )}
+              {extractedData.fromDate && (
+                <div>
+                  <span className="text-green-200/60">From:</span>
+                  <p className="text-green-200">{extractedData.fromDate}</p>
+                </div>
+              )}
+              {extractedData.toDate && (
+                <div>
+                  <span className="text-green-200/60">To:</span>
+                  <p className="text-green-200">{extractedData.toDate}</p>
+                </div>
+              )}
+              {extractedData.duration && (
+                <div>
+                  <span className="text-green-200/60">Duration:</span>
+                  <p className="text-green-200">{extractedData.duration}</p>
+                </div>
+              )}
+              {extractedData.specialization && (
+                <div className="col-span-2">
+                  <span className="text-green-200/60">Topics:</span>
+                  <p className="text-green-200">{extractedData.specialization}</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        <button 
+          onClick={() => { setShowUploadModal(false); setExtractedData(null); setUploadFileType(''); }} 
+          className="w-full mt-4 px-4 py-3 text-sm text-white border border-white/30 rounded-xl hover:bg-white/10 transition"
+        >
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       {/* ============ VIEW CERTIFICATE MODAL ============ */}
       {viewCertificate && (

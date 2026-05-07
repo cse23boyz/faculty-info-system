@@ -1,22 +1,61 @@
 // lib/certificate-parser.ts
+import { ocrSpaceExtract } from './ocr-space';
 
 export interface CertificateData {
-  certificateType: string;  // Degree, Conference, Workshop, Seminar, FDP, etc.
-  title: string;            // Full title of the certificate
-  issuedBy: string;         // Who issued the certificate
-  eventName: string;        // Conference/FDP/Workshop name
-  place: string;            // Venue/Location
-  year: number;             // Year
-  duration: string;         // Duration (e.g., "5 days", "1 week")
-  specialization: string;   // Topic/Subject
-  organizer: string;        // Organizing body
-  certificateNumber: string;// Certificate/Registration number
+  certificateType: string;
+  title: string;
+  issuedBy: string;
+  eventName: string;
+  place: string;
+  year: number;
+  duration: string;
+  specialization: string;
+  organizer: string;
+  certificateNumber: string;
+  recipientName: string;
+  fromDate: string;
+  toDate: string;
+  dateOfIssue: string;
+  confidence: number;
+  rawText: string;
 }
 
-// Comprehensive certificate parser for ALL types
-export function parseCertificateText(text: string): CertificateData {
-  const data: CertificateData = {
-    certificateType: '',
+// ==================== PDF TEXT EXTRACTION ====================
+function extractPDFText(buffer: Buffer): string {
+  try {
+    const rawText = buffer.toString('utf-8').substring(0, 10000);
+    const readable = rawText
+      .replace(/[^\x20-\x7E\s\n]/g, '')
+      .replace(/image\[\[.*?\]\]/g, '')
+      .replace(/={2,}.*?={2,}/g, '')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+    return readable;
+  } catch {
+    return '';
+  }
+}
+
+// ==================== FILE TYPE CHECKS ====================
+function isImage(fileName: string): boolean {
+  return /\.(png|jpg|jpeg|webp|bmp|tiff)$/i.test(fileName);
+}
+
+function isPDF(fileName: string): boolean {
+  return /\.pdf$/i.test(fileName);
+}
+
+function hasReadablePDFText(text: string): boolean {
+  const garbagePatterns = ['PNG', 'IHDR', 'IDAT', 'IEND', 'JFIF', 'Exif', 'RIFF'];
+  const hasGarbage = garbagePatterns.some(p => text.includes(p));
+  const hasWords = /\b[A-Za-z]{3,}\b/.test(text);
+  return !hasGarbage && hasWords && text.length > 100;
+}
+
+// ==================== TEXT PARSING ====================
+function parseText(text: string): CertificateData {
+  const result: CertificateData = {
+    certificateType: 'Certificate',
     title: '',
     issuedBy: '',
     eventName: '',
@@ -26,201 +65,242 @@ export function parseCertificateText(text: string): CertificateData {
     specialization: '',
     organizer: '',
     certificateNumber: '',
+    recipientName: '',
+    fromDate: '',
+    toDate: '',
+    dateOfIssue: '',
+    confidence: 0,
+    rawText: text,
   };
 
-  if (!text || text.trim().length === 0) return data;
+  if (!text || text.trim().length < 5) return result;
 
-  // 1. DETECT CERTIFICATE TYPE
-  if (/degree|bachelor|master|doctor|phd|ph\.d|diploma|graduation|convocation/i.test(text)) {
-    data.certificateType = 'Degree';
-  } else if (/conference|symposium|summit|meet/i.test(text)) {
-    data.certificateType = 'Conference';
-  } else if (/workshop/i.test(text)) {
-    data.certificateType = 'Workshop';
-  } else if (/seminar|webinar/i.test(text)) {
-    data.certificateType = 'Seminar';
-  } else if (/fdp|faculty development|development program/i.test(text)) {
-    data.certificateType = 'FDP';
-  } else if (/training|internship|bootcamp/i.test(text)) {
-    data.certificateType = 'Training';
-  } else if (/course|online|mooc|coursera|udemy|edx|nptel|swayam/i.test(text)) {
-    data.certificateType = 'Online Course';
-  } else if (/hackathon|coding|competition/i.test(text)) {
-    data.certificateType = 'Competition';
-  } else if (/quiz|exam|test/i.test(text)) {
-    data.certificateType = 'Quiz/Exam';
-  } else if (/participation|attended|present/i.test(text)) {
-    data.certificateType = 'Participation';
-  } else {
-    data.certificateType = 'Certificate';
-  }
+  let matchCount = 0;
+  const totalFields = 10;
 
-  // 2. EXTRACT TITLE
+  // 1. Certificate Type
+  if (/internship/i.test(text)) { result.certificateType = 'Internship'; matchCount++; }
+  else if (/(?:bachelor|master|doctor|phd|ph\.d|diploma|degree|graduation|convocation)/i.test(text)) { result.certificateType = 'Degree'; matchCount++; }
+  else if (/(?:conference|symposium|summit)/i.test(text)) { result.certificateType = 'Conference'; matchCount++; }
+  else if (/workshop/i.test(text)) { result.certificateType = 'Workshop'; matchCount++; }
+  else if (/seminar|webinar/i.test(text)) { result.certificateType = 'Seminar'; matchCount++; }
+  else if (/fdp|faculty development/i.test(text)) { result.certificateType = 'FDP'; matchCount++; }
+  else if (/training/i.test(text)) { result.certificateType = 'Training'; matchCount++; }
+  else if (/course|online|mooc|coursera|udemy|nptel|swayam/i.test(text)) { result.certificateType = 'Online Course'; matchCount++; }
+  else if (/competition|contest|hackathon/i.test(text)) { result.certificateType = 'Competition'; matchCount++; }
+  else if (/participation|attended|presented/i.test(text)) { result.certificateType = 'Participation'; matchCount++; }
+  else if (/completion|completed/i.test(text)) { result.certificateType = 'Completion'; matchCount++; }
+
+  // 2. Title
   const titlePatterns = [
-    // Conference/Workshop titles
-    /(?:conference|workshop|seminar|symposium|fdp|training)\s*(?:on|titled|:|–|-)\s*["""]?([A-Za-z0-9\s\-&,:'()]+)["""]?/i,
-    // Degree titles
-    /(?:Bachelor|Master|Doctor|PhD|Ph\.D|Diploma)\s*(?:of|in)\s*([A-Za-z\s]+)/i,
-    // Course titles
-    /(?:course|program)\s*(?:on|titled|:)\s*["""]?([A-Za-z0-9\s\-&,:'()]+)["""]?/i,
-    // Any title in quotes
-    /["""]([A-Za-z0-9\s\-&,:'()]{10,})["""]/,
-    // Title line (all caps)
-    /^([A-Z][A-Z\s]{10,})$/m,
+    /CERTIFICATE\s+OF\s+([A-Z\s\-]+)/i,
+    /(?:certificate|diploma|award)\s+(?:of|in|for)\s+([A-Za-z\s\-&,'()]+)/i,
+    /^([A-Z][A-Z\s\-&,'()]{8,})$/m,
+    /INTERNSHIP\s+(?:COMPLETION|PROGRAM|CERTIFICATE)/i,
+    /(?:INTERNSHIP|TRAINING|WORKSHOP|COURSE)\s+(?:COMPLETION|CERTIFICATE|PROGRAM)/i,
   ];
 
-  for (const pattern of titlePatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].trim().length > 5) {
-      data.title = match[1].trim();
-      break;
-    }
+  for (const p of titlePatterns) {
+    const m = text.match(p);
+    if (m && m[1] && m[1].trim().length > 3) { result.title = m[1].trim(); matchCount++; break; }
   }
 
-  // 3. EXTRACT ISSUED BY
-  const issuerPatterns = [
-    /(?:issued|certified|awarded|presented)\s*(?:by|from)\s*([A-Za-z\s.,&()]+?)(?:\n|\.|,|dated)/i,
-    /([A-Za-z\s.,&()]+)\s*(?:University|College|Institute|School|Academy|Organization|Society|Association)/i,
-    /(?:University|College|Institute|School|Organization)\s*(?:of|for)?\s*([A-Za-z\s.,&]+)/i,
-    /from\s+([A-Za-z\s.,&()]{5,}?)(?:\n|\.|,)/i,
+  if (!result.title) {
+    const titleMatch = text.match(/(CERTIFICATE\s+OF\s+[A-Z\s]+|INTERNSHIP\s+(?:COMPLETION|PROGRAM)|[A-Z][A-Z\s\-]{10,})/i);
+    if (titleMatch) { result.title = titleMatch[1].trim(); matchCount++; }
+  }
+
+  // 3. Recipient Name
+  const namePatterns = [
+    /(?:certify that|certifies that|awarded to|presented to)\s+(?:Mr\.?|Ms\.?|Mrs\.?|Dr\.?)?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/i,
+    /([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\s+has\s+(?:successfully\s+)?(?:completed|passed|achieved|finished)/i,
+    /(?:appreciate|congratulate|wish)\s+([A-Z][a-z]+(?:'s)?(?:\s+[A-Z][a-z]+){0,2})/i,
   ];
 
-  for (const pattern of issuerPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].trim().length > 3) {
-      data.issuedBy = match[1].trim();
-      break;
-    }
-  }
-
-  // 4. EXTRACT EVENT NAME
-  const eventPatterns = [
-    /(?:conference|workshop|seminar|symposium|fdp|summit|training)\s*(?:on|titled|:)\s*([A-Za-z0-9\s\-&,:'()]+)/i,
-    /([A-Za-z0-9\s\-&,:'()]+)\s*(?:Conference|Workshop|Seminar|Symposium|FDP|Summit)/i,
-    /event\s*(?:name|title)?\s*:?\s*([A-Za-z0-9\s\-&,:'()]+)/i,
-  ];
-
-  for (const pattern of eventPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].trim().length > 3) {
-      data.eventName = match[1].trim();
-      break;
-    }
-  }
-
-  // 5. EXTRACT PLACE
-  const placePatterns = [
-    /(?:at|in|venue|location|place|held at|organized at)\s*:?\s*([A-Za-z\s,]+?)(?:\n|\.|,|on|dated|from)/i,
-    /([A-Za-z\s]+),\s*(?:India|Tamil\s*Nadu|Kerala|Karnataka|Maharashtra|Delhi|Gujarat)/i,
-    /(?:Chennai|Mumbai|Delhi|Bangalore|Kolkata|Hyderabad|Pune|Ahmedabad|Jaipur|Lucknow|Coimbatore|Madurai|Trichy|Salem|Tirunelveli)/i,
-  ];
-
-  for (const pattern of placePatterns) {
-    const match = text.match(pattern);
-    if (match) {
-      data.place = match[0].trim();
-      break;
-    }
-  }
-
-  // 6. EXTRACT YEAR
-  const yearMatches = text.match(/20\d{2}/g);
-  if (yearMatches) {
-    for (const y of yearMatches) {
-      const year = parseInt(y);
-      if (year >= 1990 && year <= 2030) {
-        data.year = year;
-        break;
+  for (const p of namePatterns) {
+    const m = text.match(p);
+    if (m && m[1]) {
+      let name = m[1].trim().replace(/'s$/, '');
+      if (!/(?:certificate|university|college|institute|department|school|program|limited|private|digital|marketing|technology)/i.test(name)) {
+        result.recipientName = name; matchCount++; break;
       }
     }
   }
 
-  // 7. EXTRACT DURATION
-  const durationPatterns = [
-    /(\d+)\s*(?:days?|weeks?|months?|hours?)/i,
-    /(?:duration|period)\s*:?\s*([A-Za-z0-9\s]+)/i,
-    /(?:from|between)\s*([A-Za-z0-9\s]+)\s*(?:to|–|-)\s*([A-Za-z0-9\s]+)/i,
+  // 4. Organization/Issued By
+  const orgPatterns = [
+    /(?:with|at|from)\s+([A-Z][A-Za-z\s&.,'\-]+?)(?:\s+(?:from|for|dated|\.|,|\n|during|Director))/i,
+    /([A-Z][A-Za-z\s&.,'\-]+)\s+(?:Director|Founder|CEO|President|Principal|Head)/i,
+    /([A-Z][A-Za-z&]+(?:\s+[A-Z][A-Za-z&]+){1,4})\s*(?:Digital|Marketing|Technologies|Solutions|Services|Consulting|Academy|Institute|University|College)/i,
+    /Thanks\s*(?:&|and)?\s*Regards?,?\s*\n+([A-Za-z\s]+)\n+(?:Director|Founder)/i,
   ];
 
-  for (const pattern of durationPatterns) {
-    const match = text.match(pattern);
-    if (match) {
-      data.duration = match[0].trim();
-      break;
+  for (const p of orgPatterns) {
+    const m = text.match(p);
+    if (m && m[1] && m[1].trim().length > 3) {
+      const org = m[1].trim();
+      if (!/(?:certificate|completion|internship|training|student|candidate|participant)/i.test(org)) {
+        result.issuedBy = org; matchCount++; break;
+      }
     }
   }
 
-  // 8. EXTRACT SPECIALIZATION/TOPIC
-  const topicPatterns = [
-    /(?:on|topic|subject|theme|area|field|domain)\s*(?:of\s+)?["""]?([A-Za-z\s&]+?)(?:\.|,|\n|at|held|organized)/i,
-    /([A-Za-z\s]+)\s*(?:Engineering|Technology|Science|Management|Studies)/i,
-  ];
-
-  for (const pattern of topicPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].trim().length > 3) {
-      data.specialization = match[1].trim();
-      break;
-    }
+  // 5. Dates
+  const dates: string[] = [];
+  const dateRegex = /(\d{1,2}[\s\-./]*\d{1,2}[\s\-./]*\d{2,4})/g;
+  let dm;
+  while ((dm = dateRegex.exec(text)) !== null) {
+    if (dm[1]) dates.push(dm[1].trim());
   }
 
-  // 9. EXTRACT ORGANIZER
-  const organizerPatterns = [
-    /(?:organized|conducted|coordinated|hosted)\s*(?:by|through)\s*([A-Za-z\s.,&()]+?)(?:\n|\.|,)/i,
-    /organizer\s*:?\s*([A-Za-z\s.,&()]+)/i,
-    /department\s*(?:of|in)?\s*([A-Za-z\s.,&()]+)/i,
-  ];
-
-  for (const pattern of organizerPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].trim().length > 3) {
-      data.organizer = match[1].trim();
-      break;
-    }
+  const rangeMatch = text.match(/(?:from|between)\s+([\d\s\-./]+?)\s+(?:to|till|until|–|-)\s+([\d\s\-./]+)/i);
+  if (rangeMatch) {
+    result.fromDate = rangeMatch[1].trim();
+    result.toDate = rangeMatch[2].trim();
+    matchCount++;
+  } else if (dates.length >= 2) {
+    result.fromDate = dates[0];
+    result.toDate = dates[dates.length - 1];
+    matchCount++;
   }
 
-  // 10. EXTRACT CERTIFICATE NUMBER
-  const certNumPatterns = [
-    /(?:certificate|registration|enrollment|reference)\s*(?:no|number|#|:)?\s*:?\s*([A-Za-z0-9\-\/]+)/i,
-    /(?:reg|cert|ref)\s*(?:no|number)?\s*:?\s*([A-Za-z0-9\-\/]+)/i,
-  ];
+  const issueMatch = text.match(/(?:date|dated|issued|awarded)\s*:?\s*(\d{1,2}[\s\-./]*\d{1,2}[\s\-./]*\d{2,4})/i);
+  if (issueMatch) { result.dateOfIssue = issueMatch[1].trim(); matchCount++; }
+  else if (dates.length > 0) { result.dateOfIssue = dates[dates.length - 1]; matchCount++; }
 
-  for (const pattern of certNumPatterns) {
-    const match = text.match(pattern);
-    if (match && match[1] && match[1].length > 3) {
-      data.certificateNumber = match[1].trim();
-      break;
-    }
+  // 6. Duration
+  const durPatterns = [/(\d+)\s*(?:days?|weeks?|months?)/i, /(?:duration|period)\s*:?\s*([\w\s]+)/i];
+  for (const p of durPatterns) {
+    const m = text.match(p);
+    if (m) { result.duration = m[1].trim(); matchCount++; break; }
   }
 
-  return data;
+  if (!result.duration && result.fromDate && result.toDate) {
+    try {
+      const pd = (d: string) => {
+        const parts = d.split(/[\s\-./]+/);
+        return new Date(
+          parseInt(parts[2]?.length === 2 ? '20' + parts[2] : parts[2] || '2024'),
+          parseInt(parts[1] || '1') - 1,
+          parseInt(parts[0] || '1')
+        );
+      };
+      const d1 = pd(result.fromDate), d2 = pd(result.toDate);
+      if (d2 > d1) {
+        const diff = Math.ceil((d2.getTime() - d1.getTime()) / 86400000);
+        if (diff >= 60) result.duration = `${Math.round(diff / 30)} months`;
+        else if (diff >= 14) result.duration = `${Math.round(diff / 7)} weeks`;
+        else result.duration = `${diff} days`;
+        matchCount++;
+      }
+    } catch {}
+  }
+
+  // 7. Year
+  const ym = text.match(/20\d{2}/);
+  if (ym) { result.year = parseInt(ym[0]); matchCount++; }
+
+  // 8. Specialization/Topics
+  const specPatterns = [
+    /(digital marketing|web (?:design|development)|video editing|content creation|graphic design|data (?:science|analytics)|machine learning|artificial intelligence|cybersecurity|blockchain|cloud computing|full stack|mobile (?:app\s+)?development|python|java|react|node|angular|flutter|devops|ui\/?ux|seo|smm|social media|email marketing|wordpress|shopify)[\w\s,&]*/i,
+    /(?:involved|covered|included|topics?|areas?)\s*:?\s*([A-Za-z\s,&]+?)(?:\.|$|\n)/i,
+  ];
+
+  for (const p of specPatterns) {
+    const m = text.match(p);
+    if (m && m[1] && m[1].trim().length > 3) { result.specialization = m[1].trim(); matchCount++; break; }
+  }
+
+  // 9. Certificate Number
+  const cnMatch = text.match(/(?:certificate|registration|enrollment|reference|serial|ref)\s*(?:no|number|#|:)?\s*:?\s*([A-Za-z0-9\-\/]{3,})/i);
+  if (cnMatch) { result.certificateNumber = cnMatch[1].trim(); matchCount++; }
+
+  // 10. Organizer
+  const orgMatch = text.match(/(?:Director|Founder|Head|Manager|Coordinator)\s*(?:&|and)?\s*(?:of\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})/i);
+  if (orgMatch && orgMatch[1]) { result.organizer = orgMatch[1].trim(); matchCount++; }
+
+  result.confidence = Math.round((matchCount / totalFields) * 100);
+  return result;
 }
 
-export async function analyzeCertificate(fileBuffer: Buffer, fileName: string): Promise<CertificateData> {
+// ==================== MAIN ANALYZER ====================
+export async function analyzeCertificate(
+  fileBuffer: Buffer,
+  fileName: string
+): Promise<CertificateData> {
+  console.log('='.repeat(50));
+  console.log('🔍 CERTIFICATE ANALYSIS STARTED');
+  console.log('📁 File:', fileName);
+  console.log('📏 Size:', (fileBuffer.length / 1024).toFixed(1), 'KB');
+  console.log('='.repeat(50));
+
+  console.time('total-analysis');
   let text = '';
+  const fileType = fileName.toLowerCase();
 
-  // Clean filename
-  text = fileName
-    .replace(/\.(pdf|jpg|jpeg|png|webp)$/i, '')
-    .replace(/[-_]/g, ' ')
-    .replace(/([a-z])([A-Z])/g, '$1 $2')
-    .trim();
-
-  // Extract text from buffer
-  try {
-    const sampleText = fileBuffer.toString('utf-8').substring(0, 3000);
-    const readable = sampleText.replace(/[^\x20-\x7E\s\n]/g, '');
-    if (readable.length > 50) {
-      text = readable + '\n' + text;
+  // STEP 1: PDF - Try direct text extraction (instant)
+  if (isPDF(fileName)) {
+    console.log('📄 PDF detected - trying direct extraction...');
+    const pdfText = extractPDFText(fileBuffer);
+    
+    if (hasReadablePDFText(pdfText)) {
+      console.log('✅ PDF text extracted directly:', pdfText.length, 'chars');
+      text = pdfText;
+    } else {
+      console.log('📷 Scanned PDF - using OCR.space...');
+      text = await ocrSpaceExtract(fileBuffer, fileName);
     }
-  } catch {
-    // Ignore
+  }
+  
+  // STEP 2: Image - Use OCR.space
+  else if (isImage(fileName)) {
+    console.log('🖼️ Image detected - using OCR.space API...');
+    text = await ocrSpaceExtract(fileBuffer, fileName);
+  }
+  
+  // STEP 3: Other formats
+  else {
+    console.log('📄 Unknown format - trying buffer text...');
+    try {
+      const rawText = fileBuffer.toString('utf-8').substring(0, 5000);
+      const readable = rawText.replace(/[^\x20-\x7E\s\n]/g, '');
+      if (readable.length > 50) text = readable;
+    } catch {}
   }
 
-  console.log('📄 Parsing text (first 400 chars):', text.substring(0, 400));
+  // STEP 4: Fallback - use filename
+  if (text.length < 10) {
+    text = fileName
+      .replace(/\.(pdf|png|jpg|jpeg|webp|bmp|tiff)$/i, '')
+      .replace(/[-_]/g, ' ')
+      .replace(/([a-z])([A-Z])/g, '$1 $2')
+      .trim();
+    console.log('⚠️ Using filename fallback:', text);
+  }
+
+  console.log('📄 Text for parsing:', text.length, 'characters');
+  console.log('📄 Sample:', text.substring(0, 200));
+
+  // STEP 5: Parse the text
+  const result = parseText(text);
   
-  const result = parseCertificateText(text);
-  console.log('🤖 Extracted:', JSON.stringify(result, null, 2));
-  
+  console.timeEnd('total-analysis');
+  console.log('🤖 RESULT:', {
+    type: result.certificateType,
+    title: result.title,
+    name: result.recipientName,
+    org: result.issuedBy,
+    year: result.year,
+    from: result.fromDate,
+    to: result.toDate,
+    confidence: result.confidence + '%',
+  });
+  console.log('='.repeat(50));
+
   return result;
+}
+
+// Export for backward compatibility
+export function parseCertificateText(text: string): CertificateData {
+  return parseText(text);
 }

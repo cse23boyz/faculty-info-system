@@ -69,23 +69,27 @@ export async function POST(request: NextRequest) {
     }
 
     // Create certificate object
-    const newCertificate = {
-      certificateType: extractedData.certificateType || 'Certificate',
-      title: extractedData.title || file.name,
-      issuedBy: extractedData.issuedBy || 'Unknown',
-      eventName: extractedData.eventName || '',
-      place: extractedData.place || '',
-      year: extractedData.year || new Date().getFullYear(),
-      duration: extractedData.duration || '',
-      specialization: extractedData.specialization || '',
-      organizer: extractedData.organizer || '',
-      certificateNumber: extractedData.certificateNumber || '',
-      certificateFile: dataUrl,
-      certificateFileName: file.name,
-      verified: false,
-      uploadedAt: new Date(),
-    };
-
+const newCertificate = {
+  certificateType: extractedData.certificateType || 'Certificate',
+  title: extractedData.title || file.name.replace(/\.[^.]+$/, ''),
+  issuedBy: extractedData.issuedBy || 'Unknown',
+  eventName: extractedData.eventName || '',
+  place: extractedData.place || '',
+  year: extractedData.year || new Date().getFullYear(),
+  duration: extractedData.duration || '',
+  specialization: extractedData.specialization || '',
+  organizer: extractedData.organizer || '',
+  certificateNumber: extractedData.certificateNumber || '',
+  recipientName: extractedData.recipientName || '',
+  fromDate: extractedData.fromDate || '',
+  toDate: extractedData.toDate || '',
+  dateOfIssue: extractedData.dateOfIssue || '',
+  certificateFile: dataUrl,
+  certificateFileName: file.name,
+  confidence: extractedData.confidence || 0,
+  verified: false,
+  uploadedAt: new Date(),
+};
     // Add to faculty
     faculty.qualifications.push(newCertificate as any);
     await faculty.save();
