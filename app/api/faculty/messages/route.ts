@@ -4,8 +4,9 @@ import dbConnect from '@/lib/mongodb';
 import Message from '@/models/Message';
 import Faculty from '@/models/Faculty';
 import { verifyToken } from '@/lib/auth';
+import mongoose from 'mongoose';
 
-// GET - Get messages for current user
+// GET - Get messages/conversations
 export async function GET(request: NextRequest) {
   try {
     await dbConnect();
@@ -21,18 +22,17 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const contactId = searchParams.get('contactId');
 
+    // If contactId provided, get conversation with that specific user
     if (contactId) {
-      // Get conversation with specific contact
       const messages = await Message.find({
         $or: [
           { sender: decoded.userId, receiver: contactId },
           { sender: contactId, receiver: decoded.userId },
         ],
       })
-        .populate('sender', 'name email')
-        .populate('receiver', 'name email')
         .sort({ createdAt: 1 })
-        .limit(100);
+        .limit(100)
+        .lean();
 
       // Mark messages as read
       await Message.updateMany(
@@ -43,74 +43,89 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ messages });
     }
 
-    // Get all conversations (latest message from each contact)
-    const conversations = await Message.aggregate([
-      {
-        $match: {
-          $or: [
-            { sender: decoded.userId },
-            { receiver: decoded.userId },
-          ],
-        },
-      },
-      {
-        $sort: { createdAt: -1 },
-      },
-      {
-        $group: {
-          _id: {
-            $cond: [
-              { $eq: ['$sender', decoded.userId] },
-              '$receiver',
-              '$sender',
-            ],
-          },
-          lastMessage: { $first: '$message' },
-          lastMessageDate: { $first: '$createdAt' },
-          unreadCount: {
-            $sum: {
-              $cond: [
-                { $and: [{ $eq: ['$receiver', decoded.userId] }, { $eq: ['$read', false] }] },
-                1,
-                0,
-              ],
-            },
-          },
-        },
-      },
-      {
-        $sort: { lastMessageDate: -1 },
-      },
-    ]);
+    // Get all unique conversations
+    // Find all messages where current user is sender or receiver
+    const allMessages = await Message.find({
+      $or: [
+        { sender: decoded.userId },
+        { receiver: decoded.userId },
+      ],
+    })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    // Group by conversation partner
+    const conversationMap = new Map();
+
+    for (const msg of allMessages) {
+      const partnerId = msg.sender.toString() === decoded.userId 
+        ? msg.receiver.toString() 
+        : msg.sender.toString();
+
+      if (!conversationMap.has(partnerId)) {
+        conversationMap.set(partnerId, {
+          userId: partnerId,
+          lastMessage: msg.message,
+          lastMessageDate: msg.createdAt,
+          unreadCount: 0,
+        });
+      }
+
+      // Count unread messages
+      if (msg.receiver.toString() === decoded.userId && !msg.read) {
+        const conv = conversationMap.get(partnerId);
+        if (conv) conv.unreadCount++;
+      }
+    }
+
+    // Convert map to array
+    const conversations = Array.from(conversationMap.values());
 
     // Populate user details for each conversation
     const populatedConversations = await Promise.all(
-      conversations.map(async (conv: any) => {
-        const user = await Faculty.findOne({ userId: conv._id })
-          .select('firstName lastName email department profilePhoto');
-        return {
-          userId: conv._id,
-          user: user ? {
-            name: `${user.firstName} ${user.lastName}`,
-            email: user.email,
-            department: user.department,
-            profilePhoto: user.profilePhoto,
-          } : { name: 'Unknown', email: '', department: '', profilePhoto: '' },
-          lastMessage: conv.lastMessage,
-          lastMessageDate: conv.lastMessageDate,
-          unreadCount: conv.unreadCount,
-        };
+      conversations.map(async (conv) => {
+        try {
+          const faculty = await Faculty.findOne({ userId: conv.userId })
+            .select('firstName lastName email department profilePhoto')
+            .lean();
+
+          return {
+            ...conv,
+            user: faculty ? {
+              name: `${faculty.firstName} ${faculty.lastName}`,
+              email: faculty.email,
+              department: faculty.department || '',
+              profilePhoto: faculty.profilePhoto || '',
+            } : {
+              name: 'Unknown User',
+              email: '',
+              department: '',
+              profilePhoto: '',
+            },
+          };
+        } catch {
+          return {
+            ...conv,
+            user: { name: 'Unknown', email: '', department: '', profilePhoto: '' },
+          };
+        }
       })
     );
 
+    // Sort by most recent message
+    populatedConversations.sort((a, b) => {
+      return new Date(b.lastMessageDate).getTime() - new Date(a.lastMessageDate).getTime();
+    });
+
     return NextResponse.json({ conversations: populatedConversations });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed';
+    const message = error instanceof Error ? error.message : 'Failed to load messages';
+    console.error('Messages error:', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 
-// POST - Send a message
+// POST - Send message
 export async function POST(request: NextRequest) {
   try {
     await dbConnect();
@@ -126,7 +141,7 @@ export async function POST(request: NextRequest) {
     const body: { receiverId: string; message: string } = await request.json();
     const { receiverId, message } = body;
 
-    if (!receiverId || !message) {
+    if (!receiverId || !message || !message.trim()) {
       return NextResponse.json(
         { error: 'Receiver and message are required' },
         { status: 400 }
@@ -136,18 +151,24 @@ export async function POST(request: NextRequest) {
     const newMessage = await Message.create({
       sender: decoded.userId,
       receiver: receiverId,
-      message,
+      message: message.trim(),
+      read: false,
     });
-
-    await newMessage.populate('sender', 'name email');
-    await newMessage.populate('receiver', 'name email');
 
     return NextResponse.json({
       message: 'Message sent',
-      data: newMessage,
+      data: {
+        _id: newMessage._id,
+        sender: decoded.userId,
+        receiver: receiverId,
+        message: newMessage.message,
+        read: false,
+        createdAt: newMessage.createdAt,
+      },
     }, { status: 201 });
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : 'Failed';
+    const message = error instanceof Error ? error.message : 'Failed to send';
+    console.error('Send error:', message);
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -16,6 +16,7 @@ export async function GET(request: NextRequest) {
     const token = authHeader.split(' ')[1];
     const decoded = verifyToken(token);
 
+    // Get FULL faculty data including qualifications
     const faculty = await Faculty.findOne({ userId: decoded.userId });
 
     if (!faculty) {
@@ -23,27 +24,29 @@ export async function GET(request: NextRequest) {
     }
 
     // Check if profile is complete
-    // Department must NOT be 'General' AND designation must NOT be 'Faculty'
     const isComplete = 
       faculty.department !== 'General' && 
       faculty.department !== '' &&
       faculty.designation !== 'Faculty' && 
       faculty.designation !== '';
 
-    console.log('Profile check:', {
-      department: faculty.department,
-      designation: faculty.designation,
-      isComplete: isComplete,
-    });
-
     return NextResponse.json({
       isComplete,
       faculty: {
-        id: faculty._id,
+        _id: faculty._id,
+        userId: faculty.userId,
+        firstName: faculty.firstName,
+        lastName: faculty.lastName,
+        email: faculty.email,
+        phone: faculty.phone || '',
         department: faculty.department,
         designation: faculty.designation,
-        phone: faculty.phone,
+        specialization: faculty.specialization || '',
         profilePhoto: faculty.profilePhoto || '',
+        facultyCode: faculty.facultyCode,
+        status: faculty.status,
+        qualifications: faculty.qualifications || [],
+        publications: faculty.publications || [],
       },
     });
   } catch (error: unknown) {

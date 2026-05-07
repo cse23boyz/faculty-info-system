@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
     const search = searchParams.get('search') || '';
 
     const query: any = {
-      userId: { $ne: decoded.userId }, // Exclude current user
+      userId: { $ne: decoded.userId },
       status: 'active',
     };
 

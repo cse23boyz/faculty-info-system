@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
 
     const [facultyList, total] = await Promise.all([
       Faculty.find(filter)
-        .select('firstName lastName email department designation specialization profilePhoto qualifications publications phone')
+        .select('firstName lastName email department designation specialization profilePhoto phone facultyCode userId qualifications publications status')
         .skip(skip)
         .limit(limit)
         .sort({ firstName: 1 }),
