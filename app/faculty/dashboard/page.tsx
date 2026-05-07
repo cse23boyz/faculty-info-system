@@ -279,12 +279,13 @@ export default function FacultyDashboard() {
 
   // Menu items
   const menuItems = [
-    { id: 'network', label: 'Faculty Network', icon: '🌐' },
-    { id: 'certificates', label: 'My Certificates', icon: '📜' },
-    { id: 'announcements', label: 'Announcements', icon: '📢' },
-    { id: 'profile', label: 'My Profile', icon: '👤' },
-    { id: 'upload', label: 'Upload Certificate', icon: '📤' },
-  ];
+  { id: 'network', label: 'Faculty Network', icon: '🌐' },
+  { id: 'certificates', label: 'My Certificates', icon: '📜' },
+  { id: 'announcements', label: 'Announcements', icon: '📢' },
+  { id: 'messages', label: 'Messages', icon: '💬' },
+  { id: 'profile', label: 'My Profile', icon: '👤' },
+  { id: 'upload', label: 'Upload Certificate', icon: '📤' },
+];
 
   // Loading
   if (loading) {

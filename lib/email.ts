@@ -18,7 +18,6 @@ interface SendInviteEmailParams {
 export async function sendFacultyInviteEmail({
   to,
   facultyName,
-  username,
   password,
   facultyCode,
 }: SendInviteEmailParams) {
@@ -70,10 +69,6 @@ export async function sendFacultyInviteEmail({
                 <div class="cred-row">
                   <span class="cred-label">📋 Faculty Code:</span>
                   <span class="cred-value">${facultyCode}</span>
-                </div>
-                <div class="cred-row">
-                  <span class="cred-label">👤 Username:</span>
-                  <span class="cred-value">${username}</span>
                 </div>
                 <div class="cred-row">
                   <span class="cred-label">🔑 Password:</span>
