@@ -23,6 +23,7 @@ interface FacultyProfile {
 export default function FacultyDashboard() {
   const router = useRouter();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Auth state
   const [user, setUser] = useState<any>(null);
@@ -55,16 +56,23 @@ export default function FacultyDashboard() {
   // Announcements state
   const [announcements, setAnnouncements] = useState<any[]>([]);
 
+  // Message/Chat state
+  const [conversations, setConversations] = useState<any[]>([]);
+  const [activeChat, setActiveChat] = useState<string | null>(null);
+  const [activeChatUser, setActiveChatUser] = useState<any>(null);
+  const [chatMessages, setChatMessages] = useState<any[]>([]);
+  const [newMessage, setNewMessage] = useState('');
+  const [contactsSearch, setContactsSearch] = useState('');
+  const [contacts, setContacts] = useState<any[]>([]);
+  const [showNewChat, setShowNewChat] = useState(false);
+  const [messagesLoading, setMessagesLoading] = useState(false);
+
   // Delete state
   const [deleteConfirm, setDeleteConfirm] = useState<{
     show: boolean;
     certId: string;
     certTitle: string;
-  }>({
-    show: false,
-    certId: '',
-    certTitle: '',
-  });
+  }>({ show: false, certId: '', certTitle: '' });
 
   const departments = [
     'CSE - Computer Science and Engineering',
@@ -78,6 +86,15 @@ export default function FacultyDashboard() {
 
   const certTypes = ['All', 'Degree', 'Conference', 'Workshop', 'FDP', 'Seminar', 'Online Course', 'Training', 'Other'];
 
+  const menuItems = [
+    { id: 'network', label: 'Faculty Network', icon: '🌐' },
+    { id: 'certificates', label: 'My Certificates', icon: '📜' },
+    { id: 'announcements', label: 'Announcements', icon: '📢' },
+    { id: 'messages', label: 'Messages', icon: '💬' },
+    { id: 'profile', label: 'My Profile', icon: '👤' },
+    { id: 'upload', label: 'Upload Certificate', icon: '📤' },
+  ];
+
   // Initialize
   useEffect(() => {
     const auth = localStorage.getItem('facultyAuth');
@@ -90,7 +107,14 @@ export default function FacultyDashboard() {
     }
 
     setToken(storedToken || '');
-    if (storedUser) setUser(JSON.parse(storedUser));
+    if (storedUser) {
+      try {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
+      } catch (e) {
+        console.error('Failed to parse user:', e);
+      }
+    }
     loadMyProfile(storedToken || '');
     setLoading(false);
   }, [router]);
@@ -110,9 +134,7 @@ export default function FacultyDashboard() {
         headers: { Authorization: `Bearer ${t}` },
       });
       const data = await res.json();
-      if (data.faculty) {
-        setMyProfile(data.faculty);
-      }
+      if (data.faculty) setMyProfile(data.faculty);
     } catch (error) {
       console.error('Profile load error:', error);
     }
@@ -144,6 +166,125 @@ export default function FacultyDashboard() {
     }
   };
 
+  // Load conversations
+  const loadConversations = async () => {
+    try {
+      const res = await fetch('/api/faculty/messages', {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (data.conversations) {
+        setConversations(data.conversations);
+      }
+    } catch (error) {
+      console.error('Conversations error:', error);
+    }
+  };
+
+  // Load chat with specific user
+  const loadChat = async (userId: string) => {
+    setMessagesLoading(true);
+    setActiveChat(userId);
+    try {
+      const res = await fetch(`/api/faculty/messages?contactId=${userId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setChatMessages(data.messages || []);
+      
+      // Find active chat user info
+      const conv = conversations.find(c => c.userId === userId);
+      if (conv) {
+        setActiveChatUser(conv.user);
+      }
+      
+      setTimeout(() => {
+        if (chatEndRef.current) {
+          chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+      }, 100);
+    } catch (error) {
+      console.error('Chat load error:', error);
+    } finally {
+      setMessagesLoading(false);
+    }
+  };
+
+  // Search contacts for new chat
+  const searchContacts = async (query: string) => {
+    setContactsSearch(query);
+    if (query.length < 2) {
+      setContacts([]);
+      return;
+    }
+    try {
+      const res = await fetch(`/api/faculty/contacts?search=${query}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      setContacts(data.contacts || []);
+    } catch (error) {
+      console.error('Contacts error:', error);
+    }
+  };
+
+  // Send message
+  const sendMessage = async () => {
+    if (!newMessage.trim() || !activeChat) return;
+    const messageText = newMessage.trim();
+    setNewMessage('');
+    
+    try {
+      const res = await fetch('/api/faculty/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ receiverId: activeChat, message: messageText }),
+      });
+      const data = await res.json();
+      if (res.ok && data.data) {
+        setChatMessages(prev => [...prev, data.data]);
+        loadConversations();
+        setTimeout(() => {
+          if (chatEndRef.current) {
+            chatEndRef.current.scrollIntoView({ behavior: 'smooth' });
+          }
+        }, 100);
+      }
+    } catch (error) {
+      console.error('Send error:', error);
+      showNotification('❌ Failed to send message');
+    }
+  };
+
+  // Start new chat
+  const startNewChat = (contact: any) => {
+    setActiveChat(contact.userId);
+    setActiveChatUser(contact);
+    setShowNewChat(false);
+    setContactsSearch('');
+    setContacts([]);
+    loadChat(contact.userId);
+    loadConversations();
+  };
+
+  // Poll for new messages
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (activeTab === 'messages') {
+      loadConversations();
+      interval = setInterval(() => {
+        loadConversations();
+        if (activeChat) loadChat(activeChat);
+      }, 5000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [activeTab, activeChat]);
+
   // Search faculty
   const searchFaculty = useCallback(async () => {
     setSearchLoading(true);
@@ -151,7 +292,6 @@ export default function FacultyDashboard() {
       const params = new URLSearchParams();
       if (searchQuery) params.append('q', searchQuery);
       if (departmentFilter) params.append('department', departmentFilter);
-
       const res = await fetch(`/api/faculty/search?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -164,7 +304,6 @@ export default function FacultyDashboard() {
     }
   }, [searchQuery, departmentFilter, token]);
 
-  // Auto search
   useEffect(() => {
     if (activeTab === 'network') {
       searchFaculty();
@@ -214,21 +353,19 @@ export default function FacultyDashboard() {
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
-
       if (res.ok) {
         showNotification('✅ Certificate removed');
         loadMyCertificates();
         loadMyProfile(token);
         setDeleteConfirm({ show: false, certId: '', certTitle: '' });
       } else {
-        showNotification('❌ ' + (data.error || 'Failed to delete'));
+        showNotification('❌ ' + (data.error || 'Failed'));
       }
     } catch {
-      showNotification('❌ Failed to delete certificate');
+      showNotification('❌ Failed');
     }
   };
 
-  // Confirm delete
   const confirmDelete = (certId: string, certTitle: string) => {
     setDeleteConfirm({ show: true, certId, certTitle });
   };
@@ -238,7 +375,6 @@ export default function FacultyDashboard() {
     try {
       const params = new URLSearchParams();
       if (departmentFilter) params.append('department', departmentFilter);
-
       const res = await fetch(`/api/faculty/export?${params}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
@@ -255,20 +391,17 @@ export default function FacultyDashboard() {
     }
   };
 
-  // View profile
   const viewProfile = (faculty: FacultyProfile) => {
     setSelectedProfile(faculty);
     setActiveTab('profile');
   };
 
-  // Filtered certificates
   const filteredCertificates = certTypeFilter === 'All'
     ? myCertificates
     : certTypeFilter === 'Other'
       ? myCertificates.filter((c: any) => !['Degree', 'Conference', 'Workshop', 'FDP', 'Seminar', 'Online Course', 'Training'].includes(c.certificateType))
       : myCertificates.filter((c: any) => c.certificateType === certTypeFilter);
 
-  // Logout
   const handleLogout = () => {
     localStorage.removeItem('facultyAuth');
     localStorage.removeItem('facultyToken');
@@ -277,17 +410,6 @@ export default function FacultyDashboard() {
     router.replace('/');
   };
 
-  // Menu items
-  const menuItems = [
-  { id: 'network', label: 'Faculty Network', icon: '🌐' },
-  { id: 'certificates', label: 'My Certificates', icon: '📜' },
-  { id: 'announcements', label: 'Announcements', icon: '📢' },
-  { id: 'messages', label: 'Messages', icon: '💬' },
-  { id: 'profile', label: 'My Profile', icon: '👤' },
-  { id: 'upload', label: 'Upload Certificate', icon: '📤' },
-];
-
-  // Loading
   if (loading) {
     return (
       <main className="min-h-screen bg-gradient-to-br from-blue-600 via-indigo-600 to-violet-600 flex items-center justify-center">
@@ -334,6 +456,7 @@ export default function FacultyDashboard() {
                 setActiveTab(item.id);
                 if (item.id === 'certificates') loadMyCertificates();
                 if (item.id === 'announcements') loadAnnouncements();
+                if (item.id === 'messages') loadConversations();
                 if (item.id === 'profile') loadMyProfile();
                 if (item.id === 'upload') setShowUploadModal(true);
               }}
@@ -370,7 +493,8 @@ export default function FacultyDashboard() {
                 {activeTab === 'network' && '🌐 Faculty Network'}
                 {activeTab === 'certificates' && '📜 My Certificates'}
                 {activeTab === 'announcements' && '📢 Announcements'}
-                {activeTab === 'profile' && '👤 My Profile'}
+                {activeTab === 'messages' && '💬 Messages'}
+                {activeTab === 'profile' && '👤 Profile'}
               </h2>
               <p className="text-blue-200 text-sm mt-1">Welcome, {user?.name?.split(' ')[0]}</p>
             </div>
@@ -401,7 +525,7 @@ export default function FacultyDashboard() {
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && searchFaculty()}
-                    placeholder="Search by name, email, department, specialization..."
+                    placeholder="Search by name, email, department..."
                     className="w-full pl-12 pr-4 py-3 text-sm bg-white/10 border border-white/20 rounded-xl text-white placeholder-blue-200 focus:outline-none focus:border-white/50"
                   />
                 </div>
@@ -431,7 +555,7 @@ export default function FacultyDashboard() {
               ) : searchResults.length === 0 ? (
                 <div className="bg-white/5 backdrop-blur-md rounded-2xl p-12 border border-white/10 text-center">
                   <span className="text-6xl">🔍</span>
-                  <p className="text-white/60 mt-4">Search for faculty members or browse by department</p>
+                  <p className="text-white/60 mt-4">Search for faculty members</p>
                 </div>
               ) : (
                 <>
@@ -443,7 +567,7 @@ export default function FacultyDashboard() {
                         className="bg-white/5 backdrop-blur-md rounded-2xl p-5 border border-white/10 hover:bg-white/10 transition cursor-pointer group"
                       >
                         <div className="flex items-start gap-4">
-                          <div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-2xl flex-shrink-0 group-hover:scale-110 transition overflow-hidden">
+                          <div className="w-14 h-14 bg-white/10 rounded-full flex items-center justify-center text-2xl flex-shrink-0 overflow-hidden">
                             {faculty.profilePhoto ? (
                               <img src={faculty.profilePhoto} alt="" className="w-full h-full rounded-full object-cover" />
                             ) : '👤'}
@@ -452,22 +576,200 @@ export default function FacultyDashboard() {
                             <h3 className="text-white font-semibold truncate">{faculty.firstName} {faculty.lastName}</h3>
                             <p className="text-blue-200 text-sm truncate">{faculty.designation}</p>
                             <p className="text-blue-300 text-xs truncate">{faculty.department?.split(' - ')[0]}</p>
-                            {faculty.specialization && (
-                              <p className="text-white/50 text-xs mt-1 truncate">🎯 {faculty.specialization}</p>
-                            )}
-                            <div className="flex gap-2 mt-3">
+                            <div className="flex gap-2 mt-2">
                               <span className="text-white/40 text-xs bg-white/5 px-2 py-0.5 rounded">📜 {faculty.qualifications?.length || 0}</span>
-                              <span className="text-white/40 text-xs bg-white/5 px-2 py-0.5 rounded">📄 {faculty.publications?.length || 0}</span>
                             </div>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
-                  <p className="text-white/40 text-xs text-center mt-6">Showing {searchResults.length} faculty members</p>
+                  <p className="text-white/40 text-xs text-center mt-6">Showing {searchResults.length} faculty</p>
                 </>
               )}
             </>
+          )}
+
+          {/* ============ MESSAGES TAB ============ */}
+          {activeTab === 'messages' && (
+            <div className="max-w-5xl mx-auto">
+              <div className="bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 overflow-hidden" style={{ height: 'calc(100vh - 200px)', minHeight: '500px' }}>
+                <div className="flex h-full">
+                  {/* Conversations List */}
+                  <div className="w-80 border-r border-white/10 flex flex-col flex-shrink-0">
+                    <div className="p-4 border-b border-white/10 flex justify-between items-center">
+                      <h3 className="text-white font-semibold">💬 Messages</h3>
+                      <button
+                        onClick={() => { setShowNewChat(true); searchContacts(''); }}
+                        className="p-2 text-white/60 hover:text-white hover:bg-white/10 rounded-lg transition text-sm"
+                      >
+                        + New Chat
+                      </button>
+                    </div>
+
+                    {/* New Chat Search */}
+                    {showNewChat && (
+                      <div className="p-3 border-b border-white/10">
+                        <input
+                          type="text"
+                          placeholder="Search faculty..."
+                          value={contactsSearch}
+                          onChange={(e) => searchContacts(e.target.value)}
+                          className="w-full px-3 py-2 text-sm bg-white/10 border border-white/20 rounded-lg text-white placeholder-blue-200 focus:outline-none"
+                          autoFocus
+                        />
+                        {contacts.length > 0 && (
+                          <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                            {contacts.map((contact: any) => (
+                              <button
+                                key={contact.userId}
+                                onClick={() => startNewChat(contact)}
+                                className="w-full flex items-center gap-3 p-2 hover:bg-white/10 rounded-lg transition"
+                              >
+                                <div className="w-8 h-8 bg-white/10 rounded-full flex items-center justify-center text-sm overflow-hidden">
+                                  {contact.profilePhoto ? (
+                                    <img src={contact.profilePhoto} alt="" className="w-full h-full rounded-full object-cover" />
+                                  ) : '👤'}
+                                </div>
+                                <div className="text-left">
+                                  <p className="text-white text-sm">{contact.name}</p>
+                                  <p className="text-blue-200/60 text-xs">{contact.department?.split(' - ')[0]}</p>
+                                </div>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Conversations */}
+                    <div className="flex-1 overflow-y-auto">
+                      {conversations.length === 0 ? (
+                        <div className="text-center py-12">
+                          <span className="text-4xl">💬</span>
+                          <p className="text-white/40 text-sm mt-2">No conversations yet</p>
+                          <button onClick={() => setShowNewChat(true)} className="mt-2 text-xs text-blue-400 hover:text-blue-300">
+                            Start a chat
+                          </button>
+                        </div>
+                      ) : (
+                        conversations.map((conv: any) => (
+                          <button
+                            key={conv.userId}
+                            onClick={() => { loadChat(conv.userId); setShowNewChat(false); }}
+                            className={`w-full flex items-center gap-3 p-4 hover:bg-white/10 transition border-b border-white/5 text-left ${
+                              activeChat === conv.userId ? 'bg-white/10' : ''
+                            }`}
+                          >
+                            <div className="relative">
+                              <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center text-lg overflow-hidden">
+                                {conv.user?.profilePhoto ? (
+                                  <img src={conv.user.profilePhoto} alt="" className="w-full h-full rounded-full object-cover" />
+                                ) : '👤'}
+                              </div>
+                              {conv.unreadCount > 0 && (
+                                <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 rounded-full flex items-center justify-center text-xs text-white">
+                                  {conv.unreadCount}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex justify-between items-center">
+                                <p className="text-white text-sm font-medium truncate">{conv.user?.name}</p>
+                                <span className="text-white/40 text-xs">
+                                  {new Date(conv.lastMessageDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+                                </span>
+                              </div>
+                              <p className="text-white/50 text-xs truncate">{conv.lastMessage}</p>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Chat Area */}
+                  <div className="flex-1 flex flex-col">
+                    {activeChat ? (
+                      <>
+                        {/* Chat Header */}
+                        <div className="p-4 border-b border-white/10 flex items-center gap-3">
+                          <div className="w-10 h-10 bg-white/10 rounded-full flex items-center justify-center text-lg overflow-hidden">
+                            {activeChatUser?.profilePhoto ? (
+                              <img src={activeChatUser.profilePhoto} alt="" className="w-full h-full rounded-full object-cover" />
+                            ) : '👤'}
+                          </div>
+                          <div>
+                            <p className="text-white font-medium">{activeChatUser?.name || 'Chat'}</p>
+                            <p className="text-blue-200/60 text-xs">{activeChatUser?.department?.split(' - ')[0] || ''}</p>
+                          </div>
+                        </div>
+
+                        {/* Messages */}
+                        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                          {messagesLoading ? (
+                            <div className="text-center py-8">
+                              <div className="w-8 h-8 border-4 border-white/30 border-t-white rounded-full animate-spin mx-auto"></div>
+                            </div>
+                          ) : chatMessages.length === 0 ? (
+                            <div className="text-center py-12 text-white/40">
+                              <span className="text-4xl">💬</span>
+                              <p className="mt-2">Start the conversation!</p>
+                            </div>
+                          ) : (
+                            chatMessages.map((msg: any, i: number) => {
+                              const isMe = (msg.sender?._id === user?.id) || (msg.sender === user?.id);
+                              return (
+                                <div key={i} className={`flex ${isMe ? 'justify-end' : 'justify-start'}`}>
+                                  <div className={`max-w-[70%] rounded-2xl px-4 py-3 ${
+                                    isMe ? 'bg-indigo-500 text-white' : 'bg-white/10 text-white'
+                                  }`}>
+                                    <p className="text-sm">{msg.message}</p>
+                                    <p className={`text-xs mt-1 ${isMe ? 'text-indigo-200' : 'text-white/40'}`}>
+                                      {new Date(msg.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                    </p>
+                                  </div>
+                                </div>
+                              );
+                            })
+                          )}
+                          <div ref={chatEndRef} />
+                        </div>
+
+                        {/* Message Input */}
+                        <div className="p-4 border-t border-white/10">
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={newMessage}
+                              onChange={(e) => setNewMessage(e.target.value)}
+                              onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
+                              placeholder="Type a message..."
+                              className="flex-1 px-4 py-3 text-sm bg-white/10 border border-white/20 rounded-xl text-white placeholder-blue-200 focus:outline-none"
+                            />
+                            <button
+                              onClick={sendMessage}
+                              disabled={!newMessage.trim()}
+                              className="px-5 py-3 bg-indigo-500 text-white rounded-xl hover:bg-indigo-600 transition disabled:opacity-50 text-sm font-medium"
+                            >
+                              Send
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="flex-1 flex items-center justify-center text-white/40">
+                        <div className="text-center">
+                          <span className="text-6xl">💬</span>
+                          <p className="mt-4 text-lg">Select a conversation</p>
+                          <p className="text-sm mt-1">or start a new chat</p>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* ============ CERTIFICATES TAB ============ */}
@@ -476,15 +778,18 @@ export default function FacultyDashboard() {
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 mb-6">
                 <div>
                   <h3 className="text-xl font-bold text-white">📜 My Certificates</h3>
-                  <p className="text-blue-200/70 text-sm mt-1">{myCertificates.length} certificate{myCertificates.length !== 1 ? 's' : ''} uploaded</p>
+                  <p className="text-blue-200/70 text-sm mt-1">{myCertificates.length} certificates</p>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={loadMyCertificates} className="px-4 py-2 text-sm text-white bg-white/10 border border-white/20 rounded-xl hover:bg-white/20 transition">🔄 Refresh</button>
-                  <button onClick={() => setShowUploadModal(true)} className="px-4 py-2 text-sm font-medium text-indigo-600 bg-white rounded-xl hover:bg-gray-100 transition">+ Add Certificate</button>
+                  <button onClick={loadMyCertificates} className="px-4 py-2 text-sm text-white bg-white/10 border border-white/20 rounded-xl hover:bg-white/20 transition">
+                    🔄 Refresh
+                  </button>
+                  <button onClick={() => setShowUploadModal(true)} className="px-4 py-2 text-sm font-medium text-indigo-600 bg-white rounded-xl hover:bg-gray-100 transition">
+                    + Add
+                  </button>
                 </div>
               </div>
 
-              {/* Type Filter */}
               <div className="flex flex-wrap gap-2 mb-6">
                 {certTypes.map((type) => (
                   <button
@@ -497,7 +802,6 @@ export default function FacultyDashboard() {
                 ))}
               </div>
 
-              {/* Stats */}
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
                 {[
                   { label: 'Total', value: myCertificates.length, icon: '📜', color: 'from-blue-400/20 to-blue-500/20' },
@@ -519,8 +823,9 @@ export default function FacultyDashboard() {
                 <div className="bg-white/5 backdrop-blur-md rounded-2xl p-12 border border-white/10 text-center">
                   <span className="text-7xl">📜</span>
                   <h3 className="text-white text-lg font-medium mt-4">No Certificates Yet</h3>
-                  <p className="text-blue-200/60 text-sm mt-2 max-w-md mx-auto">Upload your degree certificates, workshop participation, conference papers, FDP certificates, and more. Our AI will automatically extract the details!</p>
-                  <button onClick={() => setShowUploadModal(true)} className="mt-6 px-6 py-3 text-sm font-medium text-indigo-600 bg-white rounded-xl hover:bg-gray-100 transition">📤 Upload Your First Certificate</button>
+                  <button onClick={() => setShowUploadModal(true)} className="mt-6 px-6 py-3 text-sm font-medium text-indigo-600 bg-white rounded-xl hover:bg-gray-100 transition">
+                    📤 Upload Your First Certificate
+                  </button>
                 </div>
               ) : (
                 <div className="space-y-4">
@@ -528,90 +833,44 @@ export default function FacultyDashboard() {
                     <div key={cert._id || index} className="bg-white/5 backdrop-blur-md rounded-2xl border border-white/10 overflow-hidden hover:bg-white/10 transition group">
                       <div className="p-5 sm:p-6">
                         <div className="flex flex-col sm:flex-row gap-4">
-                          {/* Thumbnail */}
                           <div className="sm:w-40 h-40 flex-shrink-0">
                             {cert.certificateFile ? (
-                              <div className="w-full h-full rounded-xl overflow-hidden cursor-pointer relative group/img border-2 border-white/10 hover:border-white/30 transition">
+                              <div className="w-full h-full rounded-xl overflow-hidden cursor-pointer relative border-2 border-white/10 hover:border-white/30 transition">
                                 {cert.certificateFile.startsWith('data:image') ? (
-                                  <img src={cert.certificateFile} alt={cert.title} className="w-full h-full object-contain bg-gray-900" onClick={() => setViewCertificate(cert)} />
-                                ) : cert.certificateFile.includes('application/pdf') ? (
-                                  <div className="w-full h-full bg-gradient-to-br from-red-500/20 to-red-600/20 flex flex-col items-center justify-center cursor-pointer" onClick={() => setViewCertificate(cert)}>
+                                  <img src={cert.certificateFile} alt="" className="w-full h-full object-contain bg-gray-900" onClick={() => setViewCertificate(cert)} />
+                                ) : (
+                                  <div className="w-full h-full bg-gradient-to-br from-red-500/20 to-red-600/20 flex flex-col items-center justify-center" onClick={() => setViewCertificate(cert)}>
                                     <span className="text-4xl mb-2">📄</span>
                                     <span className="text-white/60 text-xs">PDF</span>
                                   </div>
-                                ) : (
-                                  <img src={cert.certificateFile} alt={cert.title} className="w-full h-full object-contain bg-gray-900" onClick={() => setViewCertificate(cert)} />
                                 )}
-                                <div className="absolute inset-0 bg-black/0 group-hover/img:bg-black/30 transition flex items-center justify-center">
-                                  <span className="text-white opacity-0 group-hover/img:opacity-100 transition text-xs bg-black/50 px-3 py-1 rounded-full">🔍 Click to expand</span>
-                                </div>
                               </div>
                             ) : (
-                              <div className="w-full h-full bg-gradient-to-br from-indigo-500/20 to-violet-500/20 rounded-xl flex items-center justify-center border-2 border-white/5">
-                                <span className="text-4xl">{cert.certificateType === 'Degree' ? '🎓' : cert.certificateType === 'Conference' ? '🎤' : cert.certificateType === 'Workshop' ? '🔧' : cert.certificateType === 'FDP' ? '📚' : cert.certificateType === 'Seminar' ? '📢' : cert.certificateType === 'Online Course' ? '💻' : cert.certificateType === 'Training' ? '🏋️' : '📜'}</span>
+                              <div className="w-full h-full bg-gradient-to-br from-indigo-500/20 to-violet-500/20 rounded-xl flex items-center justify-center">
+                                <span className="text-4xl">📜</span>
                               </div>
                             )}
                           </div>
-
-                          {/* Details */}
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-start justify-between gap-2">
-                              <div className="flex-1">
-                                <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                                    cert.certificateType === 'Degree' ? 'bg-yellow-500/20 text-yellow-300' :
-                                    cert.certificateType === 'Conference' ? 'bg-blue-500/20 text-blue-300' :
-                                    cert.certificateType === 'Workshop' ? 'bg-green-500/20 text-green-300' :
-                                    cert.certificateType === 'FDP' ? 'bg-purple-500/20 text-purple-300' :
-                                    cert.certificateType === 'Seminar' ? 'bg-pink-500/20 text-pink-300' :
-                                    cert.certificateType === 'Online Course' ? 'bg-cyan-500/20 text-cyan-300' :
-                                    cert.certificateType === 'Training' ? 'bg-orange-500/20 text-orange-300' :
-                                    'bg-white/10 text-white/60'
-                                  }`}>{cert.certificateType || 'Certificate'}</span>
-                                  {cert.year && <span className="text-white/40 text-xs bg-white/5 px-2 py-0.5 rounded-full">📅 {cert.year}</span>}
-                                </div>
-                                <h4 className="text-white font-semibold text-base sm:text-lg">{cert.title || 'Untitled Certificate'}</h4>
-                                {cert.issuedBy && <p className="text-blue-200 text-sm mt-1">🏛️ {cert.issuedBy}</p>}
-                                <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
-                                  {cert.eventName && <p className="text-blue-300 text-xs">📅 {cert.eventName}</p>}
-                                  {cert.organizer && <p className="text-blue-300 text-xs">👥 {cert.organizer}</p>}
-                                </div>
-                                <div className="flex flex-wrap gap-2 mt-3">
-                                  {cert.place && <span className="px-2 py-1 bg-white/5 rounded-lg text-xs text-white/50">📍 {cert.place}</span>}
-                                  {cert.duration && <span className="px-2 py-1 bg-white/5 rounded-lg text-xs text-white/50">⏱️ {cert.duration}</span>}
-                                  {cert.specialization && <span className="px-2 py-1 bg-white/5 rounded-lg text-xs text-white/50">🎯 {cert.specialization}</span>}
-                                  {cert.certificateNumber && <span className="px-2 py-1 bg-white/5 rounded-lg text-xs text-white/50 font-mono">🔢 {cert.certificateNumber}</span>}
-                                </div>
-                              </div>
-                              {/* Action Buttons */}
-                              <div className="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition">
-                                {cert.certificateFile && (
-                                  <>
-                                    <button onClick={() => setViewCertificate(cert)} className="p-2 text-blue-400 hover:bg-blue-500/20 rounded-lg transition text-sm" title="View">👁️</button>
-                                    <a href={cert.certificateFile} download={cert.certificateFileName || 'certificate'} className="p-2 text-green-400 hover:bg-green-500/20 rounded-lg transition text-sm" title="Download" onClick={(e) => e.stopPropagation()}>📥</a>
-                                  </>
-                                )}
-                                <button onClick={(e) => { e.stopPropagation(); confirmDelete(cert._id, cert.title); }} className="p-2 text-red-400 hover:bg-red-500/20 rounded-lg transition text-sm" title="Delete">🗑️</button>
-                              </div>
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                                cert.certificateType === 'Degree' ? 'bg-yellow-500/20 text-yellow-300' : 'bg-white/10 text-white/60'
+                              }`}>{cert.certificateType || 'Certificate'}</span>
+                              {cert.year && <span className="text-white/40 text-xs">📅 {cert.year}</span>}
                             </div>
-                            {/* Mobile Actions */}
-                            <div className="flex gap-2 mt-4 sm:hidden">
+                            <h4 className="text-white font-semibold">{cert.title || 'Untitled'}</h4>
+                            {cert.issuedBy && <p className="text-blue-200 text-sm mt-1">🏛️ {cert.issuedBy}</p>}
+                            <div className="flex gap-2 mt-3">
                               {cert.certificateFile && (
                                 <>
-                                  <button onClick={() => setViewCertificate(cert)} className="flex-1 px-3 py-2 text-xs text-blue-400 bg-blue-500/10 rounded-lg hover:bg-blue-500/20 transition text-center">👁️ View</button>
-                                  <a href={cert.certificateFile} download={cert.certificateFileName || 'certificate'} className="flex-1 px-3 py-2 text-xs text-green-400 bg-green-500/10 rounded-lg hover:bg-green-500/20 transition text-center">📥 Download</a>
+                                  <button onClick={() => setViewCertificate(cert)} className="px-3 py-1.5 text-xs text-blue-400 bg-blue-500/10 rounded-lg hover:bg-blue-500/20 transition">👁️ View</button>
+                                  <a href={cert.certificateFile} download={cert.certificateFileName || 'certificate'} className="px-3 py-1.5 text-xs text-green-400 bg-green-500/10 rounded-lg hover:bg-green-500/20 transition">📥 Download</a>
                                 </>
                               )}
-                              <button onClick={() => confirmDelete(cert._id, cert.title)} className="flex-1 px-3 py-2 text-xs text-red-400 bg-red-500/10 rounded-lg hover:bg-red-500/20 transition text-center">🗑️ Delete</button>
+                              <button onClick={() => confirmDelete(cert._id, cert.title)} className="px-3 py-1.5 text-xs text-red-400 bg-red-500/10 rounded-lg hover:bg-red-500/20 transition">🗑️ Delete</button>
                             </div>
                           </div>
                         </div>
-                        {cert.uploadedAt && (
-                          <div className="mt-4 pt-4 border-t border-white/5 flex justify-between items-center">
-                            <p className="text-white/30 text-xs">Uploaded: {new Date(cert.uploadedAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</p>
-                            {cert.certificateFileName && <p className="text-white/30 text-xs truncate max-w-[200px]" title={cert.certificateFileName}>📄 {cert.certificateFileName}</p>}
-                          </div>
-                        )}
                       </div>
                     </div>
                   ))}
@@ -637,18 +896,13 @@ export default function FacultyDashboard() {
                   {announcements.map((ann: any) => (
                     <div key={ann._id} className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10">
                       <div className="flex items-start justify-between mb-3">
-                        <div className="flex items-center gap-3">
-                          <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                            ann.priority === 'high' ? 'bg-red-500/20 text-red-300' :
-                            ann.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-300' :
-                            'bg-green-500/20 text-green-300'
-                          }`}>
-                            {ann.priority === 'high' ? '🔴 High' : ann.priority === 'medium' ? '🟡 Medium' : '🟢 Low'}
-                          </span>
-                          <span className="text-white/40 text-xs">
-                            {ann.broadcastType === 'all' ? '📢 All Faculty' : ann.broadcastType === 'department' ? '🏛️ Department' : '👤 Direct'}
-                          </span>
-                        </div>
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          ann.priority === 'high' ? 'bg-red-500/20 text-red-300' :
+                          ann.priority === 'medium' ? 'bg-yellow-500/20 text-yellow-300' :
+                          'bg-green-500/20 text-green-300'
+                        }`}>
+                          {ann.priority === 'high' ? '🔴 High' : ann.priority === 'medium' ? '🟡 Medium' : '🟢 Low'}
+                        </span>
                         <span className="text-white/40 text-xs">{new Date(ann.createdAt).toLocaleDateString('en-IN')}</span>
                       </div>
                       <h4 className="text-white font-semibold text-lg mb-2">{ann.title}</h4>
@@ -663,15 +917,16 @@ export default function FacultyDashboard() {
           {/* ============ PROFILE TAB ============ */}
           {activeTab === 'profile' && (selectedProfile || myProfile) && (
             <div className="max-w-3xl mx-auto space-y-6">
-              {/* Profile Card */}
               <div className="bg-white/5 backdrop-blur-md rounded-2xl p-8 border border-white/10">
                 {selectedProfile && (
-                  <button onClick={() => { setSelectedProfile(null); setActiveTab('network'); }} className="text-blue-300 text-sm mb-6 hover:text-white transition">← Back to Network</button>
+                  <button onClick={() => { setSelectedProfile(null); setActiveTab('network'); }} className="text-blue-300 text-sm mb-6 hover:text-white transition">
+                    ← Back to Network
+                  </button>
                 )}
                 <div className="text-center mb-8">
                   <div className="w-28 h-28 bg-white/10 rounded-full mx-auto mb-4 flex items-center justify-center text-5xl overflow-hidden">
                     {(selectedProfile || myProfile)?.profilePhoto ? (
-                      <img src={(selectedProfile || myProfile)?.profilePhoto} alt="Profile" className="w-full h-full rounded-full object-cover" />
+                      <img src={(selectedProfile || myProfile)?.profilePhoto} alt="" className="w-full h-full rounded-full object-cover" />
                     ) : '👤'}
                   </div>
                   <h2 className="text-2xl font-bold text-white">{(selectedProfile || myProfile)?.firstName} {(selectedProfile || myProfile)?.lastName}</h2>
@@ -681,102 +936,41 @@ export default function FacultyDashboard() {
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   {[
                     { label: '📧 Email', value: (selectedProfile || myProfile)?.email },
-                    { label: '📱 Phone', value: (selectedProfile || myProfile)?.phone || 'Not provided' },
-                    { label: '🔢 Faculty Code', value: (selectedProfile || myProfile)?.facultyCode },
-                    { label: '🎯 Specialization', value: (selectedProfile || myProfile)?.specialization || 'Not specified' },
-                    { label: '📊 Status', value: (selectedProfile || myProfile)?.status },
-                    { label: '📜 Certificates', value: `${(selectedProfile || myProfile)?.qualifications?.length || 0} uploaded` },
+                    { label: '📱 Phone', value: (selectedProfile || myProfile)?.phone || 'N/A' },
+                    { label: '🔢 Code', value: (selectedProfile || myProfile)?.facultyCode },
+                    { label: '🎯 Specialization', value: (selectedProfile || myProfile)?.specialization || 'N/A' },
+                    { label: '📜 Certificates', value: `${(selectedProfile || myProfile)?.qualifications?.length || 0}` },
                   ].map((item) => (
                     <div key={item.label} className="bg-white/5 rounded-xl p-4">
                       <p className="text-blue-200/70 text-xs mb-1">{item.label}</p>
-                      <p className="text-white text-sm font-medium truncate">{item.value}</p>
+                      <p className="text-white text-sm font-medium">{item.value}</p>
                     </div>
                   ))}
                 </div>
               </div>
 
-              {/* Certificates Gallery */}
               <div className="bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10">
-                <div className="flex items-center justify-between mb-6">
-                  <h3 className="text-xl font-semibold text-white">📜 Certificates Gallery</h3>
-                  <span className="text-white/40 text-sm">{(selectedProfile || myProfile)?.qualifications?.length || 0} certificates</span>
-                </div>
+                <h3 className="text-xl font-semibold text-white mb-4">📜 Certificates Gallery</h3>
                 {(selectedProfile || myProfile)?.qualifications && ((selectedProfile || myProfile)?.qualifications?.length ?? 0) > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-                    {(selectedProfile || myProfile)?.qualifications?.map((cert: any, index: number) => (
-                      <div key={cert._id || index} className="bg-white/5 rounded-xl border border-white/10 overflow-hidden hover:border-white/30 transition group relative cursor-pointer" onClick={() => setViewCertificate(cert)}>
-                        {!selectedProfile && (
-                          <button onClick={(e) => { e.stopPropagation(); confirmDelete(cert._id, cert.title); }} className="absolute top-2 right-2 z-10 p-2 bg-red-500/80 hover:bg-red-500 text-white rounded-lg opacity-0 group-hover:opacity-100 transition text-xs" title="Remove">🗑️</button>
-                        )}
-                        <div className="h-52 bg-gray-900 overflow-hidden flex items-center justify-center relative">
-                          {cert.certificateFile ? (
-                            cert.certificateFile.startsWith('data:image') ? (
-                              <img src={cert.certificateFile} alt={cert.title || 'Certificate'} className="w-full h-full object-contain p-2" />
-                            ) : cert.certificateFile.includes('application/pdf') ? (
-                              <div className="flex flex-col items-center justify-center text-white/60 p-4">
-                                <span className="text-6xl mb-3">📄</span>
-                                <span className="text-sm font-medium">PDF Document</span>
-                                <span className="text-xs mt-1 text-white/40">Click to view full</span>
-                              </div>
-                            ) : (
-                              <img src={cert.certificateFile} alt={cert.title || 'Certificate'} className="w-full h-full object-contain p-2" />
-                            )
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+                    {(selectedProfile || myProfile)?.qualifications?.map((cert: any, i: number) => (
+                      <div key={i} className="bg-white/5 rounded-xl border border-white/10 overflow-hidden hover:border-white/30 transition cursor-pointer" onClick={() => setViewCertificate(cert)}>
+                        <div className="h-40 bg-gray-900 flex items-center justify-center">
+                          {cert.certificateFile && cert.certificateFile.startsWith('data:image') ? (
+                            <img src={cert.certificateFile} alt="" className="w-full h-full object-contain p-2" />
                           ) : (
-                            <div className="flex flex-col items-center justify-center text-white/30 p-4">
-                              <span className="text-6xl mb-3">{cert.certificateType === 'Degree' ? '🎓' : cert.certificateType === 'Conference' ? '🎤' : cert.certificateType === 'Workshop' ? '🔧' : cert.certificateType === 'FDP' ? '📚' : cert.certificateType === 'Seminar' ? '📢' : cert.certificateType === 'Online Course' ? '💻' : cert.certificateType === 'Training' ? '🏋️' : cert.certificateType === 'Competition' ? '🏆' : '📜'}</span>
-                              <span className="text-sm">No preview available</span>
-                            </div>
+                            <span className="text-4xl">📜</span>
                           )}
-                          <div className="absolute inset-0 bg-black/0 group-hover:bg-black/50 transition flex items-center justify-center">
-                            <span className="text-white opacity-0 group-hover:opacity-100 transition text-sm font-medium bg-black/60 px-4 py-2 rounded-full">🔍 Click to View Full</span>
-                          </div>
-                          <div className="absolute top-2 left-2">
-                            <span className={`px-2 py-1 rounded-full text-xs font-medium shadow-lg ${
-                              cert.certificateType === 'Degree' ? 'bg-yellow-500 text-white' :
-                              cert.certificateType === 'Conference' ? 'bg-blue-500 text-white' :
-                              cert.certificateType === 'Workshop' ? 'bg-green-500 text-white' :
-                              cert.certificateType === 'FDP' ? 'bg-purple-500 text-white' :
-                              cert.certificateType === 'Seminar' ? 'bg-pink-500 text-white' :
-                              cert.certificateType === 'Online Course' ? 'bg-cyan-500 text-white' :
-                              cert.certificateType === 'Training' ? 'bg-orange-500 text-white' :
-                              cert.certificateType === 'Competition' ? 'bg-red-500 text-white' :
-                              'bg-gray-500 text-white'
-                            }`}>{cert.certificateType || 'Certificate'}</span>
-                          </div>
                         </div>
-                        <div className="p-4">
-                          <h4 className="text-white font-semibold text-sm line-clamp-2 mb-1">{cert.title || 'Untitled Certificate'}</h4>
-                          {cert.issuedBy && <p className="text-blue-200/80 text-xs">🏛️ {cert.issuedBy}</p>}
-                          <div className="flex items-center justify-between mt-2">
-                            <span className="text-white/50 text-xs">{cert.year && `📅 ${cert.year}`}</span>
-                            {cert.duration && <span className="text-white/50 text-xs">⏱️ {cert.duration}</span>}
-                          </div>
-                          <div className="flex flex-wrap gap-1.5 mt-2">
-                            {cert.place && <span className="px-1.5 py-0.5 bg-white/5 rounded text-xs text-white/40">📍 {cert.place}</span>}
-                            {cert.specialization && <span className="px-1.5 py-0.5 bg-white/5 rounded text-xs text-white/40">🎯 {cert.specialization}</span>}
-                            {cert.certificateNumber && <span className="px-1.5 py-0.5 bg-white/5 rounded text-xs text-white/40 font-mono">#{cert.certificateNumber}</span>}
-                          </div>
-                          <div className="flex gap-2 mt-3">
-                            {cert.certificateFile && (
-                              <>
-                                <button onClick={(e) => { e.stopPropagation(); setViewCertificate(cert); }} className="flex-1 px-3 py-2 text-xs text-white bg-white/10 rounded-lg hover:bg-white/20 transition text-center">👁️ View</button>
-                                <a href={cert.certificateFile} download={cert.certificateFileName || 'certificate'} onClick={(e) => e.stopPropagation()} className="flex-1 px-3 py-2 text-xs text-white bg-white/10 rounded-lg hover:bg-white/20 transition text-center">📥 Download</a>
-                              </>
-                            )}
-                          </div>
+                        <div className="p-3">
+                          <p className="text-white text-xs font-medium truncate">{cert.title || 'Untitled'}</p>
+                          <p className="text-blue-200/60 text-xs mt-1">{cert.issuedBy}</p>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="text-center py-16">
-                    <span className="text-7xl">📜</span>
-                    <h3 className="text-white text-lg font-medium mt-4">No Certificates Yet</h3>
-                    <p className="text-white/40 text-sm mt-2 max-w-md mx-auto">{selectedProfile ? 'This faculty member has not uploaded any certificates yet.' : 'Upload your certificates to showcase your achievements.'}</p>
-                    {!selectedProfile && (
-                      <button onClick={() => setShowUploadModal(true)} className="mt-4 px-6 py-2 text-sm font-medium text-indigo-600 bg-white rounded-xl hover:bg-gray-100 transition">📤 Upload Certificate</button>
-                    )}
-                  </div>
+                  <p className="text-white/40 text-sm py-8 text-center">No certificates uploaded</p>
                 )}
               </div>
             </div>
@@ -784,18 +978,18 @@ export default function FacultyDashboard() {
         </div>
       </div>
 
-      {/* ============ UPLOAD CERTIFICATE MODAL ============ */}
+      {/* ============ UPLOAD MODAL ============ */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <div className="bg-gradient-to-br from-blue-700 via-indigo-700 to-violet-700 rounded-2xl p-8 w-full max-w-lg border border-white/20 shadow-2xl">
             <h2 className="text-2xl font-bold text-white mb-2">Upload Certificate</h2>
-            <p className="text-blue-200 text-sm mb-6">Upload PDF, JPG, or PNG. AI will auto-extract details.</p>
+            <p className="text-blue-200 text-sm mb-6">AI will auto-extract details.</p>
             <div className="space-y-4">
               <div onClick={() => fileInputRef.current?.click()} className="border-2 border-dashed border-white/30 rounded-xl p-8 text-center cursor-pointer hover:border-white/50 transition">
                 {uploading ? (
                   <div>
                     <div className="w-10 h-10 border-4 border-white/30 border-t-white rounded-full animate-spin mx-auto mb-3"></div>
-                    <p className="text-white text-sm">Analyzing certificate...</p>
+                    <p className="text-white text-sm">Analyzing...</p>
                   </div>
                 ) : (
                   <div>
@@ -808,15 +1002,12 @@ export default function FacultyDashboard() {
               </div>
               {extractedData && (
                 <div className="bg-green-500/10 rounded-xl p-4 border border-green-400/20">
-                  <h4 className="text-green-300 text-sm font-medium mb-3">🤖 AI Extracted Details:</h4>
+                  <h4 className="text-green-300 text-sm font-medium mb-3">🤖 AI Extracted:</h4>
                   <div className="grid grid-cols-2 gap-2 text-xs">
                     <div><span className="text-green-200/60">Type:</span><p className="text-green-200">{extractedData.certificateType || 'N/A'}</p></div>
                     <div><span className="text-green-200/60">Year:</span><p className="text-green-200">{extractedData.year || 'N/A'}</p></div>
                     <div className="col-span-2"><span className="text-green-200/60">Title:</span><p className="text-green-200">{extractedData.title || 'N/A'}</p></div>
                     <div className="col-span-2"><span className="text-green-200/60">Issued By:</span><p className="text-green-200">{extractedData.issuedBy || 'N/A'}</p></div>
-                    {extractedData.eventName && <div className="col-span-2"><span className="text-green-200/60">Event:</span><p className="text-green-200">{extractedData.eventName}</p></div>}
-                    {extractedData.place && <div><span className="text-green-200/60">Place:</span><p className="text-green-200">{extractedData.place}</p></div>}
-                    {extractedData.duration && <div><span className="text-green-200/60">Duration:</span><p className="text-green-200">{extractedData.duration}</p></div>}
                   </div>
                 </div>
               )}
@@ -831,55 +1022,20 @@ export default function FacultyDashboard() {
         <div className="fixed inset-0 bg-black/90 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setViewCertificate(null)}>
           <div className="bg-white rounded-2xl max-w-5xl w-full max-h-[95vh] overflow-auto" onClick={(e) => e.stopPropagation()}>
             <div className="bg-gray-900 relative">
-              {viewCertificate.certificateFile ? (
-                viewCertificate.certificateFile.startsWith('data:image') ? (
-                  <div className="flex items-center justify-center min-h-[50vh]">
-                    <img src={viewCertificate.certificateFile} alt={viewCertificate.title} className="w-full h-auto max-h-[70vh] object-contain" />
-                  </div>
-                ) : viewCertificate.certificateFile.includes('application/pdf') ? (
-                  <iframe src={viewCertificate.certificateFile} className="w-full h-[70vh]" title="Certificate PDF" />
-                ) : (
-                  <div className="flex items-center justify-center min-h-[50vh]">
-                    <img src={viewCertificate.certificateFile} alt={viewCertificate.title} className="w-full h-auto max-h-[70vh] object-contain" />
-                  </div>
-                )
+              {viewCertificate.certificateFile?.startsWith('data:image') ? (
+                <img src={viewCertificate.certificateFile} alt="" className="w-full max-h-[70vh] object-contain" />
               ) : (
                 <div className="flex items-center justify-center min-h-[30vh] text-white/40">
-                  <div className="text-center"><span className="text-6xl">📜</span><p className="mt-2">No image available</p></div>
+                  <span className="text-6xl">📜</span>
                 </div>
               )}
-              <button onClick={() => setViewCertificate(null)} className="absolute top-4 right-4 bg-black/50 hover:bg-black/70 text-white w-10 h-10 rounded-full flex items-center justify-center text-xl transition">×</button>
+              <button onClick={() => setViewCertificate(null)} className="absolute top-4 right-4 bg-black/50 text-white w-10 h-10 rounded-full flex items-center justify-center text-xl">×</button>
             </div>
             <div className="p-6">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    viewCertificate.certificateType === 'Degree' ? 'bg-yellow-100 text-yellow-700' :
-                    viewCertificate.certificateType === 'Conference' ? 'bg-blue-100 text-blue-700' :
-                    viewCertificate.certificateType === 'Workshop' ? 'bg-green-100 text-green-700' :
-                    viewCertificate.certificateType === 'FDP' ? 'bg-purple-100 text-purple-700' :
-                    viewCertificate.certificateType === 'Seminar' ? 'bg-pink-100 text-pink-700' :
-                    viewCertificate.certificateType === 'Online Course' ? 'bg-cyan-100 text-cyan-700' :
-                    viewCertificate.certificateType === 'Training' ? 'bg-orange-100 text-orange-700' :
-                    'bg-gray-100 text-gray-700'
-                  }`}>{viewCertificate.certificateType || 'Certificate'}</span>
-                  <h3 className="text-xl font-bold text-gray-900 mt-2">{viewCertificate.title}</h3>
-                </div>
-              </div>
+              <h3 className="text-xl font-bold text-gray-900">{viewCertificate.title}</h3>
               {viewCertificate.certificateFile && (
-                <a href={viewCertificate.certificateFile} download={viewCertificate.certificateFileName || 'certificate'} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 transition mb-6">📥 Download Certificate</a>
+                <a href={viewCertificate.certificateFile} download={viewCertificate.certificateFileName || 'certificate'} className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm mt-4">📥 Download</a>
               )}
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                {viewCertificate.issuedBy && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Issued By</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.issuedBy}</p></div>}
-                {viewCertificate.year && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Year</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.year}</p></div>}
-                {viewCertificate.eventName && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Event</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.eventName}</p></div>}
-                {viewCertificate.place && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Place</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.place}</p></div>}
-                {viewCertificate.duration && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Duration</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.duration}</p></div>}
-                {viewCertificate.specialization && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Topic</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.specialization}</p></div>}
-                {viewCertificate.organizer && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Organizer</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.organizer}</p></div>}
-                {viewCertificate.certificateNumber && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">Certificate No.</p><p className="text-gray-900 font-medium text-sm">{viewCertificate.certificateNumber}</p></div>}
-                {viewCertificate.certificateFileName && <div className="bg-gray-50 rounded-xl p-3"><p className="text-gray-500 text-xs">File</p><p className="text-gray-900 font-medium text-sm truncate">{viewCertificate.certificateFileName}</p></div>}
-              </div>
             </div>
           </div>
         </div>
@@ -888,23 +1044,19 @@ export default function FacultyDashboard() {
       {/* ============ DELETE CONFIRMATION MODAL ============ */}
       {deleteConfirm.show && (
         <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-2xl p-8 w-full max-w-md border border-white/10 shadow-2xl">
+          <div className="bg-gray-800 rounded-2xl p-8 w-full max-w-md border border-white/10">
             <div className="text-center mb-6">
-              <div className="w-16 h-16 bg-red-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <span className="text-3xl">⚠️</span>
-              </div>
-              <h2 className="text-2xl font-bold text-white">Delete Certificate?</h2>
-              <p className="text-gray-400 text-sm mt-2">Are you sure you want to remove this certificate?</p>
-              <p className="text-white font-medium mt-3 text-sm bg-white/5 rounded-lg px-4 py-2">&ldquo;{deleteConfirm.certTitle}&rdquo;</p>
-              <p className="text-red-400 text-xs mt-2">This action cannot be undone.</p>
+              <span className="text-4xl">⚠️</span>
+              <h2 className="text-xl font-bold text-white mt-4">Delete Certificate?</h2>
+              <p className="text-white/60 text-sm mt-2">&ldquo;{deleteConfirm.certTitle}&rdquo;</p>
             </div>
             <div className="flex gap-3">
-              <button onClick={() => setDeleteConfirm({ show: false, certId: '', certTitle: '' })} className="flex-1 px-4 py-3 text-sm text-white border border-white/30 rounded-xl hover:bg-white/10 transition">Cancel</button>
-              <button onClick={() => handleDeleteCertificate(deleteConfirm.certId)} className="flex-1 px-4 py-3 text-sm font-medium text-white bg-red-500 rounded-xl hover:bg-red-600 transition flex items-center justify-center gap-2"><span>🗑️</span> Delete</button>
+              <button onClick={() => setDeleteConfirm({ show: false, certId: '', certTitle: '' })} className="flex-1 px-4 py-3 text-sm text-white border border-white/30 rounded-xl">Cancel</button>
+              <button onClick={() => handleDeleteCertificate(deleteConfirm.certId)} className="flex-1 px-4 py-3 text-sm font-medium text-white bg-red-500 rounded-xl">Delete</button>
             </div>
           </div>
         </div>
       )}
     </main>
   );
-} 
+}
